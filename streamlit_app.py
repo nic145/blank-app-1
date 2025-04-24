@@ -155,6 +155,6 @@ components.html("""
 
 st.markdown("### 🗞️ Market News Feed")
 components.html("""
-    <iframe src="https://rss.app/embed/v1/wall/your_widget_id" 
+    <iframe src="https://rss.app/embed/v1/wall/ZtPXnZqj4zhSOTRf" 
             width="100%" height="600" frameborder="0" scrolling="no"></iframe>
 """, height=600)
