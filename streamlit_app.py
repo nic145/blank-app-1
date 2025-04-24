@@ -6,47 +6,86 @@ from datetime import datetime
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
+from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
+import ccxt
 
-st.set_page_config(
-    page_title="📱 CEX.IO Crypto Alerts",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
-
-def play_sound():
-    sound_url = "https://www.soundjay.com/buttons/sounds/beep-07.mp3"
-    st.markdown(f'''
-        <audio autoplay>
-            <source src="{sound_url}" type="audio/mpeg">
-        </audio>
-    ''', unsafe_allow_html=True)
-
-def get_cex_price(symbol1, symbol2="USD"):
-    url = f"https://cex.io/api/ticker/{symbol1}/{symbol2}"
+# Optional: Pushover for mobile push alerts
+def send_push_notification(message, user_key, app_token):
+    url = "https://api.pushover.net/1/messages.json"
+    payload = {
+        "token": app_token,
+        "user": user_key,
+        "message": message,
+        "title": "Crypto Alert",
+        "priority": 1
+    }
     try:
-        response = requests.get(url)
+        response = requests.post(url, data=payload)
         response.raise_for_status()
-        data = response.json()
-        return float(data["last"])
     except Exception as e:
-        print(f"Error fetching from CEX.IO: {e}")
-        return None
+        st.warning(f"Push notification failed: {e}")
 
-st.title("📡 CEX.IO Crypto Signal Monitor")
-st.caption("Live alerts using real-time data from CEX.IO")
+st.set_page_config(page_title="🛡️ Multi-Source Crypto Alerts", layout="centered")
+st_autorefresh(interval=15000, key="refresh")
 
-default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC"]
-custom_coin = st.text_input("➕ Add Custom Coin (e.g. ADA)", key="custom_coin_input")
+# Sidebar Settings
+st.sidebar.title("🔔 Alert Settings")
+pushover_user = st.sidebar.text_input("Pushover User Key")
+pushover_token = st.sidebar.text_input("Pushover App Token", type="password")
+
+# Price fallback system
+def get_price(symbol):
+    symbol_upper = symbol.upper()
+    try:
+        # Try CEX.IO
+        url_cex = f"https://cex.io/api/ticker/{symbol_upper}/USD"
+        response = requests.get(url_cex, timeout=5)
+        if response.status_code == 200:
+            return float(response.json()["last"]), "CEX.IO"
+    except:
+        pass
+
+    try:
+        # Try CoinGecko
+        cg_map = {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+            "XRP": "ripple",
+            "DOGE": "dogecoin",
+            "LTC": "litecoin",
+            "ADA": "cardano"
+        }
+        coingecko_id = cg_map.get(symbol_upper)
+        if coingecko_id:
+            cg_url = f"https://api.coingecko.com/api/v3/simple/price?ids={coingecko_id}&vs_currencies=usdt"
+            response = requests.get(cg_url, timeout=5)
+            if response.status_code == 200:
+                return float(response.json()[coingecko_id]["usdt"]), "CoinGecko"
+    except:
+        pass
+
+    try:
+        # Try Kraken via ccxt
+        exchange = ccxt.kraken()
+        ticker = exchange.fetch_ticker(f"{symbol_upper}/USDT")
+        return ticker["last"], "Kraken"
+    except:
+        return None, "Unavailable"
+
+# Feature section
+st.title("📡 Crypto Price Alerts with Fallbacks & Push")
+st.caption("Live predictions with multi-exchange reliability and mobile alerts.")
+
+default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA"]
+custom_coin = st.text_input("➕ Add Custom Coin", key="custom_coin_input")
 coin_list = default_coins + ([custom_coin.upper()] if custom_coin and custom_coin.upper() not in default_coins else [])
 symbol = st.selectbox("Select Coin", coin_list, index=0, key="coin_select")
-forecast_minutes = st.slider("Predict Minutes Ahead", 1, 30, 5, key="forecast_slider")
-alert_threshold = st.slider("Trigger Alert If Move > $", 0.5, 10.0, 2.0, step=0.5, key="threshold_slider")
+forecast_minutes = st.slider("Predict Minutes Ahead", 1, 30, 5)
+alert_threshold = st.slider("Alert Threshold (USDT)", 0.5, 10.0, 2.0, step=0.5)
 
-if st.button("🔄 Refresh Prediction"):
-    st.session_state["trigger_refresh"] = True
-
-# Fake some simple past data for prediction illustration
+# Simulate historical data
 np.random.seed(0)
 price_series = pd.Series(100 + np.cumsum(np.random.randn(100)))
 timestamp_series = pd.date_range(end=datetime.now(), periods=100, freq="5T")
@@ -66,23 +105,31 @@ X_scaled = scaler.fit_transform(X)
 model = RandomForestRegressor(n_estimators=100)
 model.fit(X_scaled[:-1], y[:-1])
 pred = model.predict([X_scaled[-1]])[0]
-last_price = get_cex_price(symbol)
+
+# Price and alert logic
+last_price, source = get_price(symbol)
 delta = pred - last_price if last_price else 0
 direction = "UP 📈" if delta > 0 else "DOWN 📉"
 alert = abs(delta) >= alert_threshold if last_price else False
 
 if last_price:
-    st.metric(label="Current Price", value=f"${last_price:.2f}")
-    st.metric(label="Predicted Price", value=f"${pred:.2f}")
-    st.metric(label="Expected Move", value=f"{direction} ${abs(delta):.2f}")
+    st.metric(label=f"{symbol}/USDT (via {source})", value=f"{last_price:.2f} USDT")
+    st.metric(label="Predicted Price", value=f"{pred:.2f} USDT")
+    st.metric(label="Expected Move", value=f"{direction} {abs(delta):.2f} USDT")
     if alert:
         st.success("🔔 ALERT TRIGGERED!")
-        play_sound()
+        st.write(f"Exchange: {source}")
+        if pushover_user and pushover_token:
+            send_push_notification(
+                f"{symbol}/USDT is expected to move {direction} by {abs(delta):.2f} USDT",
+                pushover_user, pushover_token
+            )
     else:
         st.info("No alert triggered.")
 else:
-    st.error("⚠️ Failed to get real-time price from CEX.IO.")
+    st.error("⚠️ Could not retrieve live price from any exchange.")
 
+# Chart
 with st.expander("📊 View Chart"):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close"))
