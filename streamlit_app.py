@@ -8,8 +8,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
 import ccxt
+import feedparser
 
 st.set_page_config(page_title="📱 Mobile AI Crypto Alerts", layout="centered")
 st_autorefresh(interval=30000, key="refresh_30s")
@@ -20,8 +20,9 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # Buttons top & center
 colA, colB = st.columns(2)
 with colA:
-     with colB:
-        refresh_news = st.button("🔄 Refresh News", use_container_width=True)
+    st.button("🔮 Predict Now", use_container_width=True)  # now non-blocking
+with colB:
+    refresh_news = st.button("🔄 Refresh News", use_container_width=True)
 
 # Define functions
 def get_pionex_price(symbol):
@@ -138,10 +139,16 @@ with st.expander("🧪 Backtesting"):
     fig.add_trace(go.Scatter(y=backtest, name="Predicted"))
     st.plotly_chart(fig, use_container_width=True)
 
-# News section
-st.markdown("### 🗞️ Market News")
-news_key = datetime.now().strftime("%Y%m%d%H%M") if refresh_news else "static"
-components.html(f"""
-<iframe src="https://rss.app/embed/v1/wall/ZtPXnZqj4zhSOTRf?key={news_key}" 
-        width="100%" height="600" frameborder="0" scrolling="no"></iframe>
-""", height=600)
+# News section using feedparser
+st.markdown("### 🗞️ Market News (Cointelegraph)")
+feed_url = "https://cointelegraph.com/rss"
+feed = feedparser.parse(feed_url)
+if feed.entries:
+    for entry in feed.entries[:5]:
+        st.markdown(f"**{entry.title}**")
+        st.caption(entry.published)
+        st.write(entry.summary)
+        st.markdown(f"[Read more]({entry.link})")
+        st.markdown("---")
+else:
+    st.warning("No news available at the moment.")
