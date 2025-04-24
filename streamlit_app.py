@@ -91,57 +91,61 @@ df.dropna(inplace=True)
 features = ["close", "returns", "sma", "ema", "rsi"]
 X = df[features]
 y = df["future"]
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
 
-st.info("🔍 Auto-tuning model... please wait.")
-param_grid = {
-    "n_estimators": [50, 100],
-    "max_depth": [5, 10, None],
-    "min_samples_leaf": [1, 2, 5]
-}
-gs = GridSearchCV(RandomForestRegressor(), param_grid, cv=3, n_jobs=-1)
-gs.fit(X_scaled[:-1], y[:-1])
-best_model = gs.best_estimator_
-pred = best_model.predict([X_scaled[-1]])[0]
-
-backtest_pred = best_model.predict(X_scaled)
-backtest_real = y.values
-mae = np.mean(np.abs(backtest_pred - backtest_real))
-acc = 100 - (mae / np.mean(backtest_real)) * 100
-
-price, source = get_price(symbol)
-delta = pred - price if price else 0
-direction = "UP 📈" if delta > 0 else "DOWN 📉"
-alert = abs(delta) >= alert_threshold if price else False
-
-if price:
-    st.metric(f"{symbol}/USDT", f"{price:.4f} USDT")
-    st.metric("Predicted Price", f"{pred:.4f} USDT")
-    st.metric("Expected Move", f"{direction} {abs(delta):.4f} USDT")
-    st.caption(f"📡 Data Source: {source}")
-    if alert:
-        st.success("🔔 ALERT TRIGGERED!")
-    else:
-        st.info("No alert triggered.")
+if len(X) < 10:
+    st.error("Not enough data after processing. Try lowering the forecast time or refreshing.")
 else:
-    st.error("⚠️ Could not fetch price from any exchange.")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-with st.expander("📈 Price & Prediction Chart"):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close Price"))
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["sma"], name="SMA", line=dict(dash="dot")))
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema"], name="EMA", line=dict(dash="dot")))
-    st.plotly_chart(fig, use_container_width=True)
+    st.info("🔍 Auto-tuning model... please wait.")
+    param_grid = {
+        "n_estimators": [50, 100],
+        "max_depth": [5, 10, None],
+        "min_samples_leaf": [1, 2, 5]
+    }
+    gs = GridSearchCV(RandomForestRegressor(), param_grid, cv=3, n_jobs=-1)
+    gs.fit(X_scaled[:-1], y[:-1])
+    best_model = gs.best_estimator_
+    pred = best_model.predict([X_scaled[-1]])[0]
 
-with st.expander("🧪 Backtesting Results"):
-    st.metric("Backtest MAE (USDT)", f"{mae:.4f}")
-    st.metric("Accuracy Estimate", f"{acc:.2f}%")
-    st.text(f"Best Params: {gs.best_params_}")
-    bt_fig = go.Figure()
-    bt_fig.add_trace(go.Scatter(y=backtest_real, name="Actual"))
-    bt_fig.add_trace(go.Scatter(y=backtest_pred, name="Predicted"))
-    st.plotly_chart(bt_fig, use_container_width=True)
+    backtest_pred = best_model.predict(X_scaled)
+    backtest_real = y.values
+    mae = np.mean(np.abs(backtest_pred - backtest_real))
+    acc = 100 - (mae / np.mean(backtest_real)) * 100
+
+    price, source = get_price(symbol)
+    delta = pred - price if price else 0
+    direction = "UP 📈" if delta > 0 else "DOWN 📉"
+    alert = abs(delta) >= alert_threshold if price else False
+
+    if price:
+        st.metric(f"{symbol}/USDT", f"{price:.4f} USDT")
+        st.metric("Predicted Price", f"{pred:.4f} USDT")
+        st.metric("Expected Move", f"{direction} {abs(delta):.4f} USDT")
+        st.caption(f"📡 Data Source: {source}")
+        if alert:
+            st.success("🔔 ALERT TRIGGERED!")
+        else:
+            st.info("No alert triggered.")
+    else:
+        st.error("⚠️ Could not fetch price from any exchange.")
+
+    with st.expander("📈 Price & Prediction Chart"):
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close Price"))
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["sma"], name="SMA", line=dict(dash="dot")))
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema"], name="EMA", line=dict(dash="dot")))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("🧪 Backtesting Results"):
+        st.metric("Backtest MAE (USDT)", f"{mae:.4f}")
+        st.metric("Accuracy Estimate", f"{acc:.2f}%")
+        st.text(f"Best Params: {gs.best_params_}")
+        bt_fig = go.Figure()
+        bt_fig.add_trace(go.Scatter(y=backtest_real, name="Actual"))
+        bt_fig.add_trace(go.Scatter(y=backtest_pred, name="Predicted"))
+        st.plotly_chart(bt_fig, use_container_width=True)
 
 st.markdown("### 🟡 Gold Price Ticker (USD)")
 components.html("""
