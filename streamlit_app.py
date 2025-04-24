@@ -140,6 +140,10 @@ with st.expander("🧪 Backtesting"):
     st.plotly_chart(fig, use_container_width=True)
 
 # News section using feedparser
+
+import feedparser
+from bs4 import BeautifulSoup
+
 st.markdown("### 🗞️ Market News (Cointelegraph)")
 feed_url = "https://cointelegraph.com/rss"
 feed = feedparser.parse(feed_url)
@@ -147,7 +151,8 @@ if feed.entries:
     for entry in feed.entries[:5]:
         st.markdown(f"**{entry.title}**")
         st.caption(entry.published)
-        st.write(entry.summary)
+        summary = BeautifulSoup(entry.summary, "html.parser").get_text()
+        st.write(summary)
         st.markdown(f"[Read more]({entry.link})")
         st.markdown("---")
 else:
