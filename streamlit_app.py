@@ -10,18 +10,32 @@ from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 import ccxt
 
-st.set_page_config(page_title="🛡️ Crypto Alerts App (No Push)", layout="centered")
-st_autorefresh(interval=15000, key="refresh")
+st.set_page_config(page_title="🛡️ Accurate Crypto Alerts", layout="centered")
+st_autorefresh(interval=30000, key="refresh_30s")  # 30 sec refresh
 
-# Price fallback logic
+# 💱 Get USD to USDT conversion rate (approx. 1 but for accuracy)
+def get_usdt_rate():
+    try:
+        res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd", timeout=5)
+        return 1 / res.json()["tether"]["usd"]
+    except:
+        return 1  # fallback to 1:1 if unavailable
+
+# 🧠 Multi-source price with conversion + logging
 def get_price(symbol):
     symbol = symbol.upper()
+    usd_to_usdt = get_usdt_rate()
+
+    # CEX.IO (USD converted to USDT)
     try:
         res = requests.get(f"https://cex.io/api/ticker/{symbol}/USD", timeout=5)
         if res.status_code == 200:
-            return float(res.json()["last"]), "CEX.IO"
+            usd_price = float(res.json()["last"])
+            return usd_price * usd_to_usdt, f"CEX.IO (converted USD→USDT @ {usd_to_usdt:.4f})"
     except:
         pass
+
+    # CoinGecko direct USDT
     try:
         ids = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
@@ -33,6 +47,8 @@ def get_price(symbol):
             return float(cg.json()[cg_id]["usdt"]), "CoinGecko"
     except:
         pass
+
+    # Kraken via ccxt
     try:
         kraken = ccxt.kraken()
         ticker = kraken.fetch_ticker(f"{symbol}/USDT")
@@ -40,7 +56,7 @@ def get_price(symbol):
     except:
         return None, "Unavailable"
 
-st.title("📡 Crypto Price Alerts (Multi-Exchange)")
+st.title("📡 Accurate Crypto Alerts (USDT View)")
 default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA"]
 custom = st.text_input("➕ Add Coin", key="add")
 coin_list = default_coins + ([custom.upper()] if custom and custom.upper() not in default_coins else [])
@@ -48,7 +64,7 @@ symbol = st.selectbox("Select Coin", coin_list, index=0, key="coin_pick")
 forecast_minutes = st.slider("Forecast Minutes Ahead", 1, 30, 5)
 alert_threshold = st.slider("Alert if Move > USDT", 0.5, 10.0, 2.0)
 
-# Generate simulated price history
+# Simulated historical data
 np.random.seed(0)
 df = pd.DataFrame({
     "timestamp": pd.date_range(end=datetime.now(), periods=100, freq="5T"),
@@ -76,9 +92,10 @@ direction = "UP 📈" if delta > 0 else "DOWN 📉"
 alert = abs(delta) >= alert_threshold if price else False
 
 if price:
-    st.metric(f"{symbol}/USDT (via {source})", f"{price:.2f} USDT")
-    st.metric("Predicted Price", f"{pred:.2f} USDT")
-    st.metric("Expected Move", f"{direction} {abs(delta):.2f} USDT")
+    st.metric(f"{symbol}/USDT", f"{price:.4f} USDT")
+    st.metric("Predicted Price", f"{pred:.4f} USDT")
+    st.metric("Expected Move", f"{direction} {abs(delta):.4f} USDT")
+    st.caption(f"📡 Data Source: {source}")
     if alert:
         st.success("🔔 ALERT TRIGGERED!")
     else:
@@ -94,7 +111,7 @@ with st.expander("📊 View Chart"):
     fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema"], name="EMA", line=dict(dash="dot")))
     st.plotly_chart(fig, use_container_width=True)
 
-# Gold ticker + News
+# Gold + News
 st.markdown("### 🟡 Gold Price Ticker (USD)")
 components.html("""
     <iframe src="https://goldbroker.com/widget/live-price/gold/1?currency=USD" 
