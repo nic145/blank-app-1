@@ -10,21 +10,28 @@ from sklearn.preprocessing import StandardScaler
 from streamlit_autorefresh import st_autorefresh
 import ccxt
 import feedparser
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="📱 Mobile AI Crypto Alerts", layout="centered")
 st_autorefresh(interval=30000, key="refresh_30s")
 
-st.markdown("<h1 style='text-align:center;'>📱 AI Crypto Alerts (Mobile Optimized)</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center;'>📱 AI Crypto Alerts (With On-Chain Data)</h1>", unsafe_allow_html=True)
 st.markdown("<hr>", unsafe_allow_html=True)
 
-# Buttons top & center
 colA, colB = st.columns(2)
 with colA:
-    st.button("🔮 Predict Now", use_container_width=True)  # now non-blocking
+    st.button("🔮 Predict Now", use_container_width=True)
 with colB:
     refresh_news = st.button("🔄 Refresh News", use_container_width=True)
 
-# Define functions
+# Coin + time inputs
+default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+custom_coin = st.text_input("➕ Custom Coin", "")
+coin = st.selectbox("Select Coin", default_coins + ([custom_coin.upper()] if custom_coin else []))
+forecast_minutes = st.slider("🕒 Predict (minutes ahead)", 5, 1440, 30, step=5)
+alert_threshold = st.slider("🚨 Alert Threshold (USDT)", 0.5, 10.0, 2.0)
+
+# Fetch price
 def get_pionex_price(symbol):
     url = "https://api.pionex.com/api/v1/market/ticker"
     params = {"symbol": symbol.lower() + "_usdt"}
@@ -62,13 +69,6 @@ def get_ohlcv(symbol, timeframe="5m", limit=300):
         return df
     except:
         return None
-
-# Coin + time inputs
-default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
-custom_coin = st.text_input("➕ Custom Coin", "")
-coin = st.selectbox("Select Coin", default_coins + ([custom_coin.upper()] if custom_coin else []))
-forecast_minutes = st.slider("🕒 Predict (minutes ahead)", 5, 1440, 30, step=5)
-alert_threshold = st.slider("🚨 Alert Threshold (USDT)", 0.5, 10.0, 2.0)
 
 df = get_ohlcv(coin)
 if df is None or df.empty:
@@ -140,10 +140,6 @@ with st.expander("🧪 Backtesting"):
     st.plotly_chart(fig, use_container_width=True)
 
 # News section using feedparser
-
-import feedparser
-from bs4 import BeautifulSoup
-
 st.markdown("### 🗞️ Market News (Cointelegraph)")
 feed_url = "https://cointelegraph.com/rss"
 feed = feedparser.parse(feed_url)
@@ -157,3 +153,49 @@ if feed.entries:
         st.markdown("---")
 else:
     st.warning("No news available at the moment.")
+
+# On-chain metrics from Santiment
+st.subheader("📡 On-Chain Metrics (Santiment)")
+
+def fetch_santiment_metric(metric_slug, symbol_slug="ethereum"):
+    query = {
+        "query": f'''
+        {{
+            getMetric(metric: "{metric_slug}") {{
+                timeseriesData(
+                    slug: "{symbol_slug}",
+                    from: "utc_now-7d",
+                    to: "utc_now",
+                    interval: "1d"
+                ) {{
+                    datetime
+                    value
+                }}
+            }}
+        }}
+        '''
+    }
+    headers = {
+        "Authorization": "Apikey vmjzjb73krrryezu_c7up7chwouddym26",
+        "Content-Type": "application/json"
+    }
+    response = requests.post("https://api.santiment.net/graphql", headers=headers, json=query)
+    if response.status_code == 200:
+        return response.json()["data"]["getMetric"]["timeseriesData"]
+    return []
+
+col1, col2 = st.columns(2)
+with col1:
+    mvrv = fetch_santiment_metric("mvrv_usd_z_score")
+    if mvrv:
+        latest = mvrv[-1]
+        st.metric("MVRV Z-Score", f"{latest['value']:.2f}", delta=None)
+    else:
+        st.warning("MVRV Z-Score unavailable")
+with col2:
+    cap_flow = fetch_santiment_metric("exchange_flow")
+    if cap_flow:
+        latest = cap_flow[-1]
+        st.metric("Capital Flow", f"{latest['value']:.2f}")
+    else:
+        st.warning("Capital Flow unavailable")
