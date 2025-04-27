@@ -246,10 +246,3 @@ if feed.entries:
         st.markdown("---")
 else:
     st.warning("No news available.")
-"""
-
-# Save full app
-with open(full_final_app_code_path, "w") as f:
-    f.write(full_final_app_code.strip())
-
-full_final_app_code_path
