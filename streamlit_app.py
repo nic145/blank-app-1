@@ -7,24 +7,22 @@ import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
-from streamlit_autorefresh import st_autorefresh
 import ccxt
 import feedparser
 from bs4 import BeautifulSoup
 
 # Basic Page Config
 st.set_page_config(page_title="📱 Mobile AI Crypto Alerts", layout="centered")
-st_autorefresh(interval=30000, key="refresh_30s")  # Auto-refresh every 30s
 
 st.markdown("<h1 style='text-align:center;'>📱 AI Crypto + On-Chain Signals</h1>", unsafe_allow_html=True)
 st.markdown("<hr>", unsafe_allow_html=True)
 
-# Top Action Buttons
-colA, colB = st.columns(2)
-with colA:
-    predict_now = st.button("🔮 Predict Now", use_container_width=True)
-with colB:
-    refresh_news = st.button("🔄 Refresh News", use_container_width=True)
+# Manual Refresh Button
+if st.button("🔄 Refresh App"):
+    st.experimental_rerun()
+
+# Timestamp of last refresh
+st.caption(f"Last Refreshed at {datetime.now().strftime('%H:%M:%S')}")
 
 # Inputs
 default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
@@ -127,25 +125,18 @@ st.metric("Expected Move", f"{direction} {abs(delta):.4f}")
 st.metric("Accuracy Estimate", f"{acc:.2f}%")
 if alert:
     st.success("🚨 ALERT TRIGGERED!")
-else:
-    st.info("No alert triggered.")
 
-# Plot Price and EMAs
-st.subheader("📈 Price Chart + EMAs")
+# === EMA Strategy Chart ===
+st.subheader("📈 EMA Strategy")
+
 df["ema8"] = df["close"].ewm(span=8).mean()
 df["ema20"] = df["close"].ewm(span=20).mean()
 df["ema50"] = df["close"].ewm(span=50).mean()
 
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close"))
-fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema8"], name="8 EMA", line=dict(dash="dot", color="blue")))
-fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema50"], name="50 EMA", line=dict(dash="dot", color="red")))
-fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema20"], name="20 EMA", line=dict(dash="dot", color="orange")))
-st.plotly_chart(fig, use_container_width=True)
-
-# Detect EMA Crossovers and Touches
-st.subheader("📈 EMA Strategy")
+# Crossovers
 df["bullish_cross"] = (df["ema8"].shift(1) < df["ema50"].shift(1)) & (df["ema8"] > df["ema50"])
+
+# Wait for touch of 20 EMA after crossover
 waiting_for_touch = False
 touch_events = []
 for idx in df.index:
@@ -155,36 +146,36 @@ for idx in df.index:
         touch_events.append(idx)
         waiting_for_touch = False
 
-fig2 = go.Figure()
-fig2.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close"))
-fig2.add_trace(go.Scatter(
-    x=df.loc[df[df["bullish_cross"]].index, "timestamp"],
-    y=df.loc[df[df["bullish_cross"]].index, "low"],
-    mode="markers", marker=dict(symbol="triangle-up", size=12, color="blue"), name="Crossover"))
+fig_strategy = go.Figure()
+fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close", line=dict(color="white")))
+fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema8"], name="8 EMA", line=dict(color="blue")))
+fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema50"], name="50 EMA", line=dict(color="red")))
+fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema20"], name="20 EMA", line=dict(color="orange")))
+
+if not df[df["bullish_cross"]].empty:
+    cross_idx = df[df["bullish_cross"]].index
+    fig_strategy.add_trace(go.Scatter(
+        x=df.loc[cross_idx, "timestamp"],
+        y=df.loc[cross_idx, "low"],
+        mode="markers",
+        marker=dict(symbol="triangle-up", size=12, color="blue"),
+        name="Bullish Crossover"
+    ))
+
 if touch_events:
-    fig2.add_trace(go.Scatter(
+    fig_strategy.add_trace(go.Scatter(
         x=df.loc[touch_events, "timestamp"],
         y=df.loc[touch_events, "low"],
-        mode="markers", marker=dict(symbol="x", size=10, color="orange"), name="Touch 20 EMA"))
-st.plotly_chart(fig2, use_container_width=True)
+        mode="markers",
+        marker=dict(symbol="x", size=10, color="orange"),
+        name="Touch 20 EMA"
+    ))
 
-# Show News
-st.markdown("### 🗞️ Market News")
-feed_url = "https://cointelegraph.com/rss"
-feed = feedparser.parse(feed_url)
-if feed.entries:
-    for entry in feed.entries[:5]:
-        st.markdown(f"**{entry.title}**")
-        st.caption(entry.published)
-        summary = BeautifulSoup(entry.summary, "html.parser").get_text()
-        st.write(summary)
-        st.markdown(f"[Read more]({entry.link})")
-        st.markdown("---")
-else:
-    st.warning("No news available.")
+st.plotly_chart(fig_strategy, use_container_width=True)
 
-# Santiment Metrics
+# === On-Chain Metrics ===
 st.subheader("📡 On-Chain Metrics (Santiment)")
+
 def fetch_santiment_metric(metric_slug, symbol_slug="ethereum"):
     query = {
         "query": f'''
@@ -227,3 +218,19 @@ with col2:
         st.metric("Capital Flow", f"{latest['value']:.2f}")
     else:
         st.warning("Capital Flow unavailable")
+
+# === Market News ===
+st.subheader("🗞️ Market News (Cointelegraph)")
+
+feed_url = "https://cointelegraph.com/rss"
+feed = feedparser.parse(feed_url)
+if feed.entries:
+    for entry in feed.entries[:5]:
+        st.markdown(f"**{entry.title}**")
+        st.caption(entry.published)
+        summary = BeautifulSoup(entry.summary, "html.parser").get_text()
+        st.write(summary)
+        st.markdown(f"[Read more]({entry.link})")
+        st.markdown("---")
+else:
+    st.warning("No news available.")
