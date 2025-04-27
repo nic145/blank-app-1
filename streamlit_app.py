@@ -4,224 +4,236 @@ import numpy as np
 import requests
 from datetime import datetime
 import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
-from sklearn.preprocessing import StandardScaler
 import ccxt
 import feedparser
 from bs4 import BeautifulSoup
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
 
-# Basic Page Config
-st.set_page_config(page_title="📱 Mobile AI Crypto Alerts", layout="centered")
+# Set page
+st.set_page_config(page_title="📈 Crypto Monitor & Predictor", layout="wide", initial_sidebar_state="expanded")
+st.title("📈 AI Crypto Monitor + Strategy Signals")
+st.markdown("---")
 
-st.markdown("<h1 style='text-align:center;'>📱 AI Crypto + On-Chain Signals</h1>", unsafe_allow_html=True)
-st.markdown("<hr>", unsafe_allow_html=True)
-
-# Manual Refresh Button
-if st.button("🔄 Refresh App"):
+# Manual Refresh
+if st.button("🔄 Refresh Now"):
     st.experimental_rerun()
 
-# Timestamp of last refresh
-st.caption(f"Last Refreshed at {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
 
-# Inputs
-default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
-custom_coin = st.text_input("➕ Custom Coin", "")
-coin = st.selectbox("Select Coin", default_coins + ([custom_coin.upper()] if custom_coin else []))
-forecast_minutes = st.slider("🕒 Predict (minutes ahead)", 5, 1440, 30, step=5)
-alert_threshold = st.slider("🚨 Alert Threshold (USDT)", 0.5, 10.0, 2.0)
+# === Utilities ===
+def format_price(price):
+    return f"${price:,.2f}"
 
-# Fetch Price
-def get_pionex_price(symbol):
-    try:
-        url = "https://api.pionex.com/api/v1/market/ticker"
-        params = {"symbol": symbol.lower() + "_usdt"}
-        res = requests.get(url, params=params, timeout=5)
-        res.raise_for_status()
-        return float(res.json()["data"]["price"]), "Pionex"
-    except:
-        return None, "Unavailable"
+def format_percent(change):
+    return f"{change:+.2f}%"
 
-def get_price(symbol):
-    price, source = get_pionex_price(symbol)
-    if price: return price, source
-    ids = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "DOGE": "dogecoin"}
-    try:
-        cg_id = ids.get(symbol.upper())
-        if cg_id:
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usdt"
-            return float(requests.get(url, timeout=5).json()[cg_id]["usdt"]), "CoinGecko"
-    except: pass
-    try:
-        kraken = ccxt.kraken()
-        return kraken.fetch_ticker(f"{symbol}/USDT")["last"], "Kraken"
-    except:
-        return None, "Unavailable"
+def get_percent_color(change):
+    if change > 0:
+        return "green"
+    elif change < 0:
+        return "red"
+    else:
+        return "gray"
 
-# Fetch OHLCV
-def get_ohlcv(symbol, timeframe="5m", limit=300):
-    try:
-        kraken = ccxt.kraken()
-        kraken.load_markets()
-        pair = f"{symbol}/USDT" if f"{symbol}/USDT" in kraken.symbols else f"{symbol}/USD"
-        df = kraken.fetch_ohlcv(pair, timeframe, limit)
-        df = pd.DataFrame(df, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        return df
-    except:
+def create_price_history_chart(df, symbol):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['close'], mode='lines', name=symbol))
+    fig.update_layout(title=f"{symbol} Price History", xaxis_title="Time", yaxis_title="Price (USDT)")
+    return fig
+
+# === MultiExchange Monitor ===
+class MultiExchangeCryptoMonitor:
+    def __init__(self):
+        self.exchanges = {
+            "pionex": "https://api.pionex.com/api/v1/market/ticker",
+            "coingecko": "https://api.coingecko.com/api/v3/simple/price",
+        }
+        self.kraken = ccxt.kraken()
+        self.symbols = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+
+    def get_price(self, symbol):
+        try:
+            res = requests.get(self.exchanges["pionex"], params={"symbol": symbol.lower()+"_usdt"}, timeout=5)
+            if res.ok:
+                return float(res.json()["data"]["price"]), "Pionex"
+        except:
+            pass
+        try:
+            ids = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana","XRP":"ripple","DOGE":"dogecoin"}
+            res = requests.get(self.exchanges["coingecko"], params={"ids": ids.get(symbol, symbol.lower()), "vs_currencies":"usdt"}, timeout=5)
+            if res.ok:
+                return float(list(res.json().values())[0]["usdt"]), "CoinGecko"
+        except:
+            pass
+        try:
+            self.kraken.load_markets()
+            price = self.kraken.fetch_ticker(f"{symbol}/USDT")["last"]
+            return price, "Kraken"
+        except:
+            return None, "Unavailable"
+
+    def get_ohlcv(self, symbol, timeframe="5m", limit=300):
+        try:
+            self.kraken.load_markets()
+            pair = f"{symbol}/USDT" if f"{symbol}/USDT" in self.kraken.symbols else f"{symbol}/USD"
+            data = self.kraken.fetch_ohlcv(pair, timeframe, limit)
+            df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            return df
+        except:
+            return pd.DataFrame()
+
+    def get_ticker(self, symbol):
+        price, source = self.get_price(symbol)
+        if price:
+            return {
+                "last": price,
+                "bid": price * 0.999,
+                "ask": price * 1.001,
+                "volume": np.random.randint(1000,50000),
+                "change": np.random.uniform(-5,5),
+                "timestamp": datetime.now(),
+                "exchange": source
+            }
         return None
 
-df = get_ohlcv(coin)
-if df is None or df.empty:
-    st.warning("⚠️ Using simulated data...")
-    df = pd.DataFrame({
-        "timestamp": pd.date_range(end=datetime.now(), periods=300, freq="5T"),
-        "close": 100 + np.cumsum(np.random.randn(300))
-    })
+    def predict_price(self, symbol, timeframe, prediction_hours):
+        df = self.get_ohlcv(symbol, timeframe)
+        if df.empty:
+            return None
+        df["returns"] = df["close"].pct_change()
+        df["sma"] = df["close"].rolling(10).mean()
+        df["ema"] = df["close"].ewm(span=10).mean()
+        df["rsi"] = df["returns"].rolling(14).mean() / (df["returns"].rolling(14).std() + 1e-8)
+        df["future"] = df["close"].shift(-prediction_hours)
+        df.dropna(inplace=True)
 
-# Build Indicators
-df["returns"] = df["close"].pct_change()
-df["sma"] = df["close"].rolling(10).mean()
-df["ema"] = df["close"].ewm(span=10).mean()
-df["rsi"] = df["returns"].rolling(14).mean() / (df["returns"].rolling(14).std() + 1e-8)
-df["future"] = df["close"].shift(-forecast_minutes)
-df.dropna(inplace=True)
+        features = ["close", "returns", "sma", "ema", "rsi"]
+        X = df[features]
+        y = df["future"]
 
-features = ["close", "returns", "sma", "ema", "rsi"]
-X = df[features]
-y = df["future"]
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        model = GridSearchCV(RandomForestRegressor(), {
+            "n_estimators": [50,100],
+            "max_depth": [5,10,None]
+        }, cv=3, n_jobs=-1)
+        model.fit(X_scaled[:-1], y[:-1])
+        best_model = model.best_estimator_
 
-if len(X) < 10:
-    st.error("Not enough data. Try reducing prediction time.")
-    st.stop()
+        pred = best_model.predict([X_scaled[-1]])[0]
+        backtest = best_model.predict(X_scaled)
+        real = y.values
+        mae = np.mean(np.abs(backtest - real))
+        acc = 100 - (mae / np.mean(real)) * 100
 
-# Train AI Model
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-gs = GridSearchCV(RandomForestRegressor(), {
-    "n_estimators": [50, 100],
-    "max_depth": [5, 10, None],
-    "min_samples_leaf": [1, 2, 5]
-}, cv=3, n_jobs=-1)
-gs.fit(X_scaled[:-1], y[:-1])
-model = gs.best_estimator_
-pred = model.predict([X_scaled[-1]])[0]
-backtest = model.predict(X_scaled)
-real = y.values
+        return {
+            "predicted_price": pred,
+            "prediction_df": pd.DataFrame({
+                "timestamp": [df.iloc[-1]["timestamp"] + pd.Timedelta(minutes=prediction_hours)],
+                "predicted_price": [pred]
+            }),
+            "percent_change": ((pred - df.iloc[-1]["close"]) / df.iloc[-1]["close"]) * 100,
+            "confidence": acc,
+            "signal": "BUY" if pred > df.iloc[-1]["close"] else "SELL"
+        }
 
-# Accuracy
-mae = np.mean(np.abs(backtest - real))
-acc = 100 - (mae / np.mean(real)) * 100
+# === App Starts ===
+monitor = MultiExchangeCryptoMonitor()
 
-# Show Metrics
-price, source = get_price(coin)
-delta = pred - price if price else 0
-direction = "📈 Up" if delta > 0 else "📉 Down"
-alert = abs(delta) >= alert_threshold if price else False
+default_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+custom_coin = st.text_input("➕ Add Custom Coin", "")
+coin = st.selectbox("Select Cryptocurrency", default_coins + ([custom_coin.upper()] if custom_coin else []))
+timeframe = st.selectbox("Select Timeframe", ["1m","5m","15m","1h","4h","1d"], index=3)
+prediction_minutes = st.slider("🕒 Prediction Horizon (minutes)", 5, 1440, 30)
+alert_threshold = st.slider("🚨 Alert Threshold (USDT)", 0.5, 1000.0, 2.0, step=0.5)
 
-st.metric(f"{coin}/USDT Price", f"{price:.4f}" if price else "Unavailable", help=f"Source: {source}")
-st.metric("Predicted", f"{pred:.4f}")
-st.metric("Expected Move", f"{direction} {abs(delta):.4f}")
-st.metric("Accuracy Estimate", f"{acc:.2f}%")
-if alert:
-    st.success("🚨 ALERT TRIGGERED!")
+# Price
+price, source = monitor.get_price(coin)
+st.metric(f"{coin}/USDT Price", format_price(price) if price else "Unavailable", help=f"Source: {source}")
 
-# === EMA Strategy Chart ===
-st.subheader("📈 EMA Strategy")
+# Prediction
+pred_result = monitor.predict_price(coin, timeframe, prediction_minutes)
+if pred_result:
+    delta = pred_result["predicted_price"] - price
+    st.metric("Predicted Price", format_price(pred_result["predicted_price"]))
+    st.metric("Expected Move", f"{'📈' if delta>0 else '📉'} {abs(delta):.2f} USDT")
+    st.metric("Model Confidence", f"{pred_result['confidence']:.1f}%")
+    if price and abs(delta) >= alert_threshold:
+        st.success("🚨 ALERT TRIGGERED!")
 
-df["ema8"] = df["close"].ewm(span=8).mean()
-df["ema20"] = df["close"].ewm(span=20).mean()
-df["ema50"] = df["close"].ewm(span=50).mean()
+# Chart
+df = monitor.get_ohlcv(coin, timeframe)
+if not df.empty:
+    df["ema8"] = df["close"].ewm(span=8).mean()
+    df["ema20"] = df["close"].ewm(span=20).mean()
+    df["ema50"] = df["close"].ewm(span=50).mean()
+    df["bullish_cross"] = (df["ema8"].shift(1) < df["ema50"].shift(1)) & (df["ema8"] > df["ema50"])
 
-# Crossovers
-df["bullish_cross"] = (df["ema8"].shift(1) < df["ema50"].shift(1)) & (df["ema8"] > df["ema50"])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close", line=dict(color="white")))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema8"], name="8 EMA", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema50"], name="50 EMA", line=dict(color="red")))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["ema20"], name="20 EMA", line=dict(color="orange")))
 
-# Wait for touch of 20 EMA after crossover
-waiting_for_touch = False
-touch_events = []
-for idx in df.index:
-    if df.at[idx, "bullish_cross"]:
-        waiting_for_touch = True
-    if waiting_for_touch and df.at[idx, "low"] <= df.at[idx, "ema20"]:
-        touch_events.append(idx)
-        waiting_for_touch = False
+    if df["bullish_cross"].any():
+        fig.add_trace(go.Scatter(
+            x=df[df["bullish_cross"]]["timestamp"],
+            y=df[df["bullish_cross"]]["low"],
+            mode="markers",
+            marker=dict(symbol="triangle-up", size=10, color="blue"),
+            name="Bullish Crossover"
+        ))
 
-fig_strategy = go.Figure()
-fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["close"], name="Close", line=dict(color="white")))
-fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema8"], name="8 EMA", line=dict(color="blue")))
-fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema50"], name="50 EMA", line=dict(color="red")))
-fig_strategy.add_trace(go.Scatter(x=df["timestamp"], y=df["ema20"], name="20 EMA", line=dict(color="orange")))
+    st.plotly_chart(fig, use_container_width=True)
 
-if not df[df["bullish_cross"]].empty:
-    cross_idx = df[df["bullish_cross"]].index
-    fig_strategy.add_trace(go.Scatter(
-        x=df.loc[cross_idx, "timestamp"],
-        y=df.loc[cross_idx, "low"],
-        mode="markers",
-        marker=dict(symbol="triangle-up", size=12, color="blue"),
-        name="Bullish Crossover"
-    ))
-
-if touch_events:
-    fig_strategy.add_trace(go.Scatter(
-        x=df.loc[touch_events, "timestamp"],
-        y=df.loc[touch_events, "low"],
-        mode="markers",
-        marker=dict(symbol="x", size=10, color="orange"),
-        name="Touch 20 EMA"
-    ))
-
-st.plotly_chart(fig_strategy, use_container_width=True)
-
-# === On-Chain Metrics ===
-st.subheader("📡 On-Chain Metrics (Santiment)")
-
-def fetch_santiment_metric(metric_slug, symbol_slug="ethereum"):
+# On-Chain Metrics
+st.subheader("📡 On-Chain Metrics")
+def fetch_santiment(metric, slug="ethereum"):
     query = {
-        "query": f'''
+        "query": f"""
         {{
-            getMetric(metric: "{metric_slug}") {{
-                timeseriesData(
-                    slug: "{symbol_slug}",
-                    from: "utc_now-7d",
-                    to: "utc_now",
-                    interval: "1d"
-                ) {{
+            getMetric(metric: "{metric}") {{
+                timeseriesData(slug: "{slug}", from: "utc_now-7d", to: "utc_now", interval: "1d") {{
                     datetime
                     value
                 }}
             }}
         }}
-        '''
+        """
     }
     headers = {
         "Authorization": "Apikey vmjzjb73krrryezu_c7up7chwouddym26",
         "Content-Type": "application/json"
     }
-    response = requests.post("https://api.santiment.net/graphql", headers=headers, json=query)
-    if response.status_code == 200:
-        return response.json()["data"]["getMetric"]["timeseriesData"]
-    return []
+    try:
+        res = requests.post("https://api.santiment.net/graphql", headers=headers, json=query)
+        data = res.json()
+        values = data["data"]["getMetric"]["timeseriesData"]
+        if values:
+            return values[-1]["value"]
+    except:
+        return None
 
 col1, col2 = st.columns(2)
 with col1:
-    mvrv = fetch_santiment_metric("mvrv_usd_z_score")
-    if mvrv:
-        latest = mvrv[-1]
-        st.metric("MVRV Z-Score", f"{latest['value']:.2f}")
+    mvrv = fetch_santiment("mvrv_usd_z_score")
+    if mvrv is not None:
+        st.metric("MVRV Z-Score", f"{mvrv:.2f}")
     else:
-        st.warning("MVRV unavailable")
+        st.warning("MVRV data unavailable.")
+
 with col2:
-    cap_flow = fetch_santiment_metric("exchange_flow")
-    if cap_flow:
-        latest = cap_flow[-1]
-        st.metric("Capital Flow", f"{latest['value']:.2f}")
+    cap_flow = fetch_santiment("exchange_flow")
+    if cap_flow is not None:
+        st.metric("Capital Flow", f"{cap_flow:.2f}")
     else:
-        st.warning("Capital Flow unavailable")
+        st.warning("Capital Flow unavailable.")
 
-# === Market News ===
-st.subheader("🗞️ Market News (Cointelegraph)")
-
+# News
+st.subheader("📰 Market News")
 feed_url = "https://cointelegraph.com/rss"
 feed = feedparser.parse(feed_url)
 if feed.entries:
@@ -234,3 +246,10 @@ if feed.entries:
         st.markdown("---")
 else:
     st.warning("No news available.")
+"""
+
+# Save full app
+with open(full_final_app_code_path, "w") as f:
+    f.write(full_final_app_code.strip())
+
+full_final_app_code_path

@@ -1,9 +1,9 @@
+streamlit
 pandas
 numpy
 requests
 plotly
-scikit-learn
-streamlit-autorefresh
 ccxt
 feedparser
 beautifulsoup4
+scikit-learn
